@@ -1,0 +1,17 @@
+<?php
+	include_once('connect_db.php');
+
+	$r= array();
+	$editId = $_GET['editId'];
+	$getDataSql = "SELECT * FROM subjects s WHERE s.id='".$editId."' LIMIT 1";
+	$getDataRes = mysql_query($getDataSql,$connection);
+	if($getDataRes){
+		$r = mysql_fetch_assoc($getDataRes);
+		if($r){
+			$getDataRes = mysql_query("SELECT * from course WHERE abbrCourse = '".$r['course']."' LIMIT 1",$connection);
+			$courseDetail = mysql_fetch_assoc($getDataRes);
+			$r['course_details'] = $courseDetail;
+		}
+	}
+	echo json_encode($r);
+?>

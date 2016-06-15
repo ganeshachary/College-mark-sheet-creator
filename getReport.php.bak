@@ -1,0 +1,549 @@
+<?php
+include_once('connect_db.php');
+include_once('functions.php');
+
+	if(isset($_POST['getReport'])){
+		
+		$course = $_POST['txtcourse'];
+		$semester = $_POST['txtsemester'];
+		$seatno = $_POST['txtseatno'];
+		$month = $_POST['txtmonth'];
+		$year = $_POST['txtyear'];
+		$passingyear = $month."-".$year;
+		$resdate = $_POST['resdate'];
+
+		// get subjects for the selected semester and course from database --- start
+		$subjects = array();
+		$getSubjectsRes = mysql_query("SELECT subjects from subjects WHERE course='".$course."' AND semester='".$semester."'",$connection);
+		$getSubjects = mysql_fetch_assoc($getSubjectsRes);
+		$getSubjectsArray = $getSubjects['subjects'];
+		$getSubjectsArray =json_decode($getSubjectsArray,true);
+		if($getSubjectsArray[0]['subject']=="")
+		{
+			echo "Error : No subjects defined";
+			exit;
+		}
+		else{
+			$subjects = $getSubjectsArray;
+		}
+		// get subjects for the selected semester and course from database --- end
+
+		$getStudentRes = mysql_query("SELECT * from studentreport WHERE course='".$course."' AND semester='".$semester."' AND seatNo='".$seatno."' AND monthYear='".$passingyear."' LIMIT 1",$connection);
+		if(!$getStudentRes){
+			echo "No such data exists in database ";
+			exit;
+		}
+		else{
+			$obtinternal = array();
+			$obtexternal = array();
+			$getMarks = mysql_fetch_assoc($getStudentRes);
+			if(!$getMarks){
+				echo "<script>alert('No data exist for specified values');</script>";
+				echo "<script>window.history.back();</script>";
+				exit;
+			}
+			$marks = array();
+			$marks = json_decode($getMarks['marks'],true);
+			
+			foreach($marks as $m){
+				$obtinternal[] = $m['internal'];
+				$obtexternal[] = $m['external'];
+			}
+			$candidatename= $getMarks['studentName'] ;
+			$image = $getMarks['studentPhoto'];
+		}
+		$getProgrammeRes =mysql_query("SELECT courseName from course WHERE abbrCourse = '".$course."'");
+		$getProgramme = mysql_fetch_assoc($getProgrammeRes);
+		$programme = $getProgramme['courseName'];		
+	}
+	
+	else
+	if(isset($_POST['submit']) || isset($_POST['getcsv'])){
+		$course = $_POST['txtcourse'];
+		$semester = $_POST['txtsemester'];
+		$month = $_POST['txtmonth'];
+		$year = $_POST['txtyear'];
+		$passingyear = $month."-".$year;
+
+		// get subjects for the selected semester and course from database --- start
+		$subjects = array();
+		$getSubjectsRes = mysql_query("SELECT subjects from subjects WHERE course='".$course."' AND semester='".$semester."'",$connection);
+		$getSubjects = mysql_fetch_assoc($getSubjectsRes);
+		$getSubjectsArray = $getSubjects['subjects'];
+		$getSubjectsArray =json_decode($getSubjectsArray,true);
+		if($getSubjectsArray[0]['subject']=="")
+		{
+			echo "Error : No data found";
+			exit;
+		}
+		else{
+			$subjects = $getSubjectsArray;
+			if(isset($_POST['getcsv'])){
+				if(!empty($subjects)){
+					if(empty($course) || empty($semester) || empty($month) || empty($year)){
+						echo "<script>alert('Error: fields Course, Semester and passing monthYear are mandatory');</script>";
+						echo "<script>window.history.back()</script>";
+						exit;
+					}
+					$filename= $course;
+					$csv_filename = $filename."_".date("Y-m-d-H-i",time()).".csv";
+					@$fileContent .= $course."\n".$semester."\n"."Passing:".$passingyear."\n";
+					$fileContent .= " SrNo, Student Name, Seat No, ";
+					foreach($subjects as $key=>$val){
+						$fileContent .= $val['subject'].",".$val['subject'].",";
+					}
+					$fileContent .="\n";
+					$fileContent .=",,,";
+
+					for($i=0;$i<count($subjects);$i++){
+						$fileContent.=" internal, external ,";
+					}
+					$fileContent = substr($fileContent,0,-1);
+					header("Content-type: text/csv");
+					header("Content-Disposition: attachment; filename=$csv_filename");
+					header("Pragma: no-cache");
+					header("Expires: 0");
+					echo $fileContent;
+					exit;
+				}
+			}
+		}
+		// get subjects for the selected semester and course from database --- end
+
+		if(isset($_FILES["txtmarksfile"]) && $_FILES["txtmarksfile"]["name"]!=""){
+			// process file
+			move_uploaded_file($_FILES["txtmarksfile"]["tmp_name"],
+ "Excel/" . $_FILES["txtmarksfile"]["name"]); 
+			echo "FileName :". $_FILES["txtmarksfile"]["name"];
+				$row = 1;
+				$fileSql = "INSERT into studentreport(seatNo,course,semester,studentName,monthYear,marks) VALUES";
+				if (($handle = fopen("Excel/" . $_FILES["txtmarksfile"]["name"], "r")) !== FALSE) {
+					while (($data = fgetcsv($handle, 1000, ",")) != FALSE) {
+						if($row == 1){
+							$fcourse = $data[0];
+						}
+						else if($row == 2){
+							$fsemester = $data[0];
+							$fsubjects= getSubjects($connection,array("subjects"),array("course"=>$fcourse,"semester"=>$fsemester,"limit"=>1));
+							$fsubjects = json_decode($fsubjects[0]['subjects'],true);
+						}
+						else if($row == 3){
+							$passingyear = explode(":",$data[0]);
+						}
+						else if($row > 5){
+							$candidatename = $data[1];
+							$seatno = $data[2];
+							$marksArr = array();
+							$s = -1;
+							for($m =3; $m<(count($fsubjects)*2)+3;$m+=2){
+								$obtArr = array("subject"=>$fsubjects[++$s]['subject'],"internal"=>$data[$m],"external"=>$data[$m+1]);
+								$marksArr[] = $obtArr;
+							}
+							$returnVal = validateMarks($fsubjects,$marksArr);
+							if($returnVal ==1){
+									echo "<script>alert('Error: marks invalid');</script>";
+									echo "<script>window.history.back()</script>";
+									exit;
+							}
+							$fileSql .= " ('".$seatno."','".$fcourse."','".$fsemester."','".$candidatename."','".$passingyear[1]."','".json_encode($marksArr)."'),";
+						}
+						$row++;
+					}
+					fclose($handle);
+				}
+				
+				$fileSql = substr($fileSql,0,-1);
+				$finsert = mysql_query($fileSql,$connection);
+				if($finsert){
+					echo "<script>alert('File details saved sucessfully');</script>";
+					echo "<script>window.location.href = 'input_form.php';</script>";
+					exit;
+				}
+				else{
+					echo "Error inserting data from file";
+					exit;
+				}
+		}
+		
+		$seatno = $_POST['txtseatno'];
+		$candidatename= $_POST['txtcandidatename'];
+		
+
+		if(empty($course) || empty($semester) || empty($seatno) || empty($candidatename) || empty($month) || empty($year)){
+			echo "<script>alert('Error: All fields are mandatory');</script>";
+			echo "<script>window.history.back()</script>";
+			exit;
+		}
+
+		if(!ctype_alpha(str_replace(' ','',$candidatename))){
+			echo "<script>alert('Error: Candidate name should contain only characters');</script>";
+			echo "<script>window.history.back()</script>";
+			exit;
+		}
+
+
+		$obtinternal = $_POST['txtobtinternal'];
+		$obtexternal = $_POST['txtobtexternal'];
+
+		
+		//create subject and corresponding marks Array ---start
+		for($i=0;$i<count($subjects);$i++){
+			$marksArray[] = array('subject'=>$subjects[$i]['subject'],'internal'=>$obtinternal[$i],'external'=>$obtexternal[$i]);
+		}
+		//create subject and corresponding marks Array---- end
+
+		###############################
+		######## VALIDATION ###########
+		###############################
+		
+
+		$validationResult = validateMarks($subjects,$marksArray);
+		if($validationResult==1){
+			echo "<script>alert('Error: Obtained marks is greater than maximum marks');</script>";
+			echo "<script>window.history.back()</script>";
+			exit;
+		}
+
+
+
+		//VALIDATION------ end
+			
+			//move selected image file onto server
+			move_uploaded_file($_FILES["txtcandidatephoto"]["tmp_name"],
+ "images/" . $_FILES["txtcandidatephoto"]["name"]); 
+		$image = "images/" . $_FILES["txtcandidatephoto"]["name"];
+		
+		//Get from database if student data is existing --- start
+		$getStudentRes = mysql_query("SELECT id,seatNo,semester,studentName,monthYear from studentreport WHERE seatNo='".$seatno."' AND studentName='".$candidatename."' AND monthYear='".$passingyear."' LIMIT 1 ");	
+
+		if($getStudentRes){
+			$studentData = mysql_fetch_assoc($getStudentRes);
+			if($studentData){
+			$updateStudentRes = mysql_query("UPDATE studentreport SET seatNo='".$seatno."',course='".$course."',semester='".$semester."',studentName='".$candidatename."',monthYear= '".$passingyear."',marks = '".json_encode($marksArray)."' WHERE id='".$studentData['id']."' LIMIT 1"); 
+			}
+			else{
+			
+				// INSERT A NEW RECORD
+				$insertStudentRes = mysql_query("INSERT into studentreport(seatNo,course,semester,studentName,studentPhoto,monthYear,marks) VALUES('".$seatno."','".$course."','".$semester."','".$candidatename."','".$image."','".$passingyear."','".json_encode($marksArray)."')",$connection);
+			}
+		}
+		
+		///Get from database if student data is existing --- end
+		
+		$getProgrammeRes =mysql_query("SELECT courseName from course WHERE abbrCourse = '".$course."'");
+		$getProgramme = mysql_fetch_assoc($getProgrammeRes);
+		$programme = $getProgramme['courseName'];
+
+			
+	}
+	else if(isset($_GET['chklist'])){
+		$id= $_GET['chklist'];
+		$id = substr($id,0,-1);
+		$rptdata = getReport ($connection, array('*'),array('id'=>$id));
+		/*echo "<pre>";
+		print_r($rptdata);
+		exit;*/
+		foreach($rptdata as $key=>$val){
+
+			$course = $val['course'];
+			$semester = $val['semester'];
+
+			$getProgrammeRes =mysql_query("SELECT courseName from course WHERE abbrCourse = '".$course."' LIMIT 1");
+			$getProgramme = mysql_fetch_assoc($getProgrammeRes);
+			$programme = $getProgramme['courseName'];
+
+			// get subjects for the selected semester and course from database --- start
+			$subjects = array();
+			$getSubjectsRes = mysql_query("SELECT subjects from subjects WHERE course='".$course."' AND semester='".$semester."'",$connection);
+			$getSubjects = mysql_fetch_assoc($getSubjectsRes);
+			$getSubjectsArray = $getSubjects['subjects'];
+			$getSubjectsArray =json_decode($getSubjectsArray,true);
+			if($getSubjectsArray[0]['subject']=="")
+			{
+			echo "Error : No data found";
+			exit;
+			}
+			else{
+			$subjects = $getSubjectsArray;
+			}
+			
+			$seatno = $val['seatNo'];
+			$candidatename = $val['studentName'];
+			$passingyear = $val['monthYear'];
+			$marks = json_decode($val['marks'],true);
+			
+			$stSubjects = array();
+			$obtinternal = array();
+			$obtexternal = array();
+			foreach($marks as $m){
+				$stSubjects[] = array("subject"=>$m['subject']);
+				$obtinternal[] = $m['internal'];
+				$obtexternal[] = $m['external'];
+				
+			}
+			
+			include("reportPage.php");
+
+		}
+		exit;
+	}
+
+	
+
+switch($semester)
+{
+	case "Semester-1":
+	$sem = "FIRST SEMESTER";
+	$yr = "FIRST YEAR";
+	break;
+
+	case "Semester-2":
+	$sem = "SECOND SEMESTER";
+	$yr = "FIRST YEAR";
+	break;
+
+	case "Semester-3":
+	$sem = "THIRD SEMESTER";
+	$yr = "SECOND YEAR";
+	break;
+
+	case "Semester-4":
+	$sem = "FOURTH SEMESTER";
+	$yr = "SECOND YEAR";
+	break;
+
+	case "Semester-5":
+	$sem = "FIFTH SEMESTER";
+	$yr = "THIRD YEAR";
+	break;
+
+	case "Semester-6":
+	$sem = "SIXTH SEMESTER";
+	$yr = "THIRD YEAR";
+	break;
+}
+
+$titleText = "<font size=\"2px\">University of Mumbai <br> 
+			ABC Institute of Research And Studies <br>
+			(Affiliated to Universiry of Mumbai) <br>
+			B-Road, Churchgate, Mumbai-400020 <br></font>
+			SPECIMEN COPY OF GRADE CARD ".$course." ".$yr." ".$sem." FOR PASSING <br>
+			GRADE CARD" ;
+$passfail="Passes";
+
+//print_r($obtinternal);
+//print_r($obtexternal);
+
+?>
+<html>
+<head>
+<style type='text/css'>
+.left img{ width: 30%; height: 15%; float:left; text-align:left; display:inline; }
+.right img{ width: 20%;  height: 10%; float:right; text-align:left; display:inline; }
+.center img{ width: 30%; height: 15%; float:center; text-align:left; display:inline; }
+.right img{ width: 20%;  height: 10%; float:right; text-align:left; display:inline; }
+.container { width: 80%; margin:auto; float: center;}
+</style>
+<script>
+function setColValue(val)
+{
+	document.getElementById('tbl_cell').innerHTML=val;
+}
+</script>
+</head>
+<body>
+<table width="100%" align="center" style="font-size:11px">
+<tr>
+<td align="left" width="15%"><img src="university.jpg" width="100%" height="100%"></td>
+<td align="center"><?php echo $titleText?></td>
+<td align="right"  width="15%"><img src="siescoms.jpg"  width="100%" height="100%"></td>
+</tr>
+</table>
+
+<table width="100%" align="center" style="font-size:11px">
+<tr>
+<td align="center">Programme : <br> <?=$programme?> </td>
+<td colspan="2" align="center"><?=$semester?></td>
+<td width="8%"  rowspan="2" align="right"><img src="<?=$image?>" width="70%" ></td>
+</tr>
+<tr>
+<td width="10%" align="center">Examination Seat No<br><?=$seatno?></td>
+<td width="20%" align="center">Name Of The Candidate<br><?=$candidatename?></td>
+<td width="20%" align="center">Month And Year Of Passing<br><?=$passingyear?></td>
+</tr>
+</table>
+<br>
+<table  width="100%" border="1" align="center" style="font-size:11px" id="tbl_marks">
+<tr>
+<th>Course in Semester</th>
+<th colspan="2">Internal Assessment </th>
+<th colspan="2">Semester End Examination</th>
+<th colspan="2">Total Marks</th>
+<th rowspan="2">Grade</th>
+<th rowspan="2">Grade Points (G)</th>
+<th rowspan="2">Credits Per Course (C)</th>
+<th rowspan="2">C*G</th>
+<th rowspan="2">SGPA=&#8721;(CG)/&#8721;(C)</th>
+</tr>
+<tr>
+<td>&nbsp;</td>
+<td>Maximum Marks</td>
+<td>Marks Obtained</td>
+<td>Maximum Marks</td>
+<td>Marks Obtained</td>
+<td>Maximum Marks</td>
+<td>Marks Obtained</td>
+</tr>
+<tr id="tbl_row">
+<td>&nbsp;</td>
+<td>&nbsp;</td>
+<td align="center">(A)</td>
+<td>&nbsp;</td>
+<td align="center">(B)</td>
+<td>&nbsp;</td>
+<td align="center">(A+B)</td>
+<td>&nbsp;</td>
+<td>&nbsp;</td>
+<td>&nbsp;</td>
+<td>&nbsp;</td>
+<td rowspan = "<?=count($subjects)+2?>" align="center" id="tbl_cell"></td>
+</tr>
+<?php
+$i=-1;
+$sumCreditsPerCourse = 0;
+$sumofProduct = 0;
+foreach($subjects as $val)
+{
+		$i++;
+?>
+<tr>
+<td width="20%"><?=$val['subject']?></td>
+<td align="center"><?=$val['internal']?></td>
+<td align="center"><?=@$obtinternal[$i]?></td>
+<td align="center"><?=$val['external']?></td>
+<td align="center"><?=@$obtexternal[$i]?></td>
+<td align="center"><?php $overallTotal = $val['internal']+$val['external']; echo $overallTotal;?></td>
+<td align="center"><?php $totalMarks = @$obtinternal[$i]+@$obtexternal[$i]; echo $totalMarks; ?></td>
+<td align="center"><?php 
+
+	$percentTotalMarks = round(($totalMarks/$overallTotal)*100,2);
+	$creditsPerCourse = round($val['external']/30);
+
+if($percentTotalMarks >= 75){
+	$grade = "O";
+	$gradePoints = 7;
+	//$creditsPerCourse = 2;
+}else if($percentTotalMarks >= 70 && $percentTotalMarks <= 74.99 ){
+	$grade = "A";
+	$gradePoints = 6;
+	//$creditsPerCourse = 1;
+}else if($percentTotalMarks >= 65 && $percentTotalMarks <= 69.99 ){
+	$grade = "B";
+	$gradePoints = 5;
+	//$creditsPerCourse = 1;
+}else if($percentTotalMarks >= 60 && $percentTotalMarks <= 64.99 ){
+	$grade = "C";
+	$gradePoints = 4;
+	//$creditsPerCourse = 2;
+}else if($percentTotalMarks >= 55 && $percentTotalMarks <= 59.99 ){
+	$grade = "D";
+	$gradePoints = 3;
+	//$creditsPerCourse = 2;
+}else if($percentTotalMarks >= 50 && $percentTotalMarks <= 54.99 ){
+	$grade = "E";
+	$gradePoints = 2;
+	//$creditsPerCourse = 2;
+}else if($percentTotalMarks <= 49.99 ){
+	$grade = "F";
+	$gradePoints = 1;
+	//$creditsPerCourse = 2;
+	$passfail="Fails";
+}
+echo $grade;
+?></td>
+<td align="center"><?=$gradePoints?></td>
+<td align="center"><?php echo $creditsPerCourse; $sumCreditsPerCourse+=$creditsPerCourse?></td>
+
+<td align="center"><?php $product = $creditsPerCourse*$gradePoints;
+echo $product;
+$sumofProduct+=$product;
+?></td>
+</tr>
+<?php
+
+}
+?>
+<tr>
+<td>Total</td>
+<td>&nbsp;</td>
+<td>&nbsp;</td>
+<td>&nbsp;</td>
+<td>&nbsp;</td>
+<td>&nbsp;</td>
+<td>&nbsp;</td>
+<td>&nbsp;</td>
+<td>&nbsp;</td>
+<td align="center">&#8721;(C)= <?=$sumCreditsPerCourse?></td>
+<td align="center">&#8721;(CG)=  <?=$sumofProduct?></td>
+</tr>
+
+<tr>
+<td colspan="4" align="center" id="credits">Credits Earned =</td>
+<td colspan="2" align="center" id="sgpa">SGPA=</td>
+<td colspan="3"></td>
+<td>&nbsp;</td>
+<td>&nbsp;</td>
+<td rowspan="2" id="finalGrade" align="center"></td>
+</tr>
+
+<tr>
+<td colspan="9" align="center" id="passfail"></td>
+<td>&nbsp;</td>
+<td>&nbsp;</td>
+</tr>
+</table>
+<?php
+$finalRow = $sumofProduct/$sumCreditsPerCourse;
+if($finalRow>=6.5 && $finalRow<=7)
+$finalGrade = "O";
+
+else if($finalRow>=5.5 && $finalRow<=6.49)
+$finalGrade = "A";
+
+else if($finalRow>=4.5 && $finalRow<=5.49)
+$finalGrade = "B";
+
+else if($finalRow>=3.5 && $finalRow<=4.49)
+$finalGrade = "C";
+
+else if($finalRow>=2.5 && $finalRow<=3.49)
+$finalGrade = "D";
+
+else if($finalRow>=2 && $finalRow<=2.49)
+$finalGrade = "E";
+
+else if($finalRow<2)
+$finalGrade = "F";
+
+
+$str = "<script>document.getElementById('tbl_cell').innerHTML='".round($finalRow,1)."';
+document.getElementById('sgpa').innerHTML='SGPA = ".round($finalRow,1)."';
+document.getElementById('finalGrade').innerHTML='Grade ".$finalGrade."';
+document.getElementById('credits').innerHTML='Credits Earned = ".$sumCreditsPerCourse."';
+document.getElementById('passfail').innerHTML='".$passfail."';
+</script>";
+echo $str;
+?>
+<table  width="100%" align="center" cellpadding="20px" style="font-size:11px">
+<tr>
+<td colspan="3">Note: A student will be declared as Pass, if he secures minimum 50% in the internal assessment And the Semester End Examination separately</td>
+</tr>
+<tr>
+<td align="left">Results Declared on <?=$resdate?></td>
+<td>Chairperson(Examination)</td>
+<td align="right">Director</td>
+</tr>
+</table>
+<div class="page-break"></div>
+</body>
+</html>
